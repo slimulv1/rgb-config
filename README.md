@@ -36,11 +36,13 @@ git clone https://github.com/slimulv1/rgb-config ~/rgb-config
 
 ### 1. I2C
 
-OpenRGB nói chuyện với RAM, GPU, mainboard qua bus I2C.
+RAM đi qua bus I2C (`i2c-i801` trên mainboard), nên OpenRGB cần quyền đọc bus đó.
+Mainboard thì **không** qua I2C — nó nhận qua USB HID của AURA LED Controller
+(`0b05:19af`), xử lý ở Bước 4. GPU thì đi USB.
 
 ```bash
 sudo pacman -S i2c-tools
-sudo modprobe i2c-dev i2c-i801
+sudo modprobe i2c-dev i2c-i801 2>/dev/null || true
 
 sudo tee /etc/modules-load.d/i2c.conf > /dev/null <<'EOF'
 i2c-dev
@@ -48,18 +50,85 @@ i2c-i801
 EOF
 ```
 
+`modprobe` có thể báo "module not found" trên kernel build sẵn (`CONFIG_I2C_CHARDEV=y`,
+`CONFIG_I2C_I801=y` — đây là mặc định của kernel Arch/CachyOS). Không phải lỗi:
+module đã nằm sẵn trong kernel. Chỉ cần đảm bảo `modprobe i2c-dev` tạo ra
+`/dev/i2c-*`.
+
+**`i2c-tools` không phải lúc nào cũng thừa** — nó cài kèm hai thứ mà Bước 4 cần:
+
+- `/usr/lib/sysusers.d/i2c-tools.conf` → tạo group `i2c`. Thiếu group này thì
+  `usermod -aG i2c` báo `group 'i2c' does not exist`.
+- `/usr/lib/udev/rules.d/45-i2c-tools.rules` → `GROUP="i2c", MODE="0660"` cho
+  `/dev/i2c-*`. Đây là đường truy cập **không cần login**, khác với ACL
+  `uaccess` chỉ có sau khi mở phiên đồ hoạ.
+
+```bash
+getent group i2c                              # phải có dòng i2c:x:...:
+ls -l /dev/i2c-9                             # root:i2c crw-rw---- (major 89)
+```
+
 ### 2. Nhường bus SPD cho RAM DDR5
 
-Module kernel `spd5118` giữ bus SPD, nên OpenRGB không thấy RAM. Chặn nó rồi
-reboot:
+Module kernel `spd5118` giữ bus SPD, nên OpenRGB không thấy RAM. Chặn nó:
 
 ```bash
 echo "blacklist spd5118" | sudo tee /etc/modprobe.d/blacklist-spd5118.conf
+```
+
+Initramfs có cần build lại không? **Tùy.** Hook `modconf` chép
+`/etc/modprobe.d/*.conf` vào initramfs, nên blacklist có hiệu lực lúc early boot
+mà không cần build lại — **trừ khi** `spd5118.ko` nằm sẵn trong initramfs, lúc đó
+phải build lại để blacklist vào (hoặc để module biến mất khỏi đó). Kiểm:
+
+```bash
+# 1. Layout /boot khác nhau theo bootloader — tìm file initramfs:
+sudo find /boot -name 'initramfs*' -o -name 'initrd*'
+
+# 2. Dán path tìm được vào biến, rồi xem bên trong (cần sudo; /boot là 0700):
+INITRD=/boot/$(cat /etc/machine-id)/linux-arisa/initramfs
+sudo lsinitcpio "$INITRD" | grep -i spd5118
+```
+
+Kết quả trên máy tham chiếu (bootloader Limine, initramfs theo machine-id):
+
+```bash
+$ sudo lsinitcpio /boot/$(cat /etc/machine-id)/linux-arisa/initramfs | grep -i spd5118
+etc/modprobe.d/blacklist-spd5118.conf
+```
+
+Chỉ có **file blacklist**, không có `spd5118.ko` — hook `autodetect` chỉ nhét
+module cần để boot. Vậy blacklist trên root fs là đủ để chặn, và
+`mkinitcpio` **không cần chạy**. Nếu bạn thấy cả `spd5118.ko` trong đó thì mới
+cần:
+
+```bash
 sudo mkinitcpio -P
+```
+
+> **`-P` nghĩa là `--allpresets`, không phải "preset mặc định".** Nó chỉ rebuild
+> preset có trong `/etc/mkinitcpio.d/`. Máy tham chiếu chạy kernel `linux-arisa`
+> nhưng preset trong thư mục đó là `linux-cachyos.preset` +
+> `linux-cachyos-lts.preset` — **không preset nào cho arisa**, nên `mkinitcpio -P`
+> không đụng tới initramfs kernel đang chạy. Kiểm trước:
+>
+> ```bash
+> uname -r
+> ls /etc/mkinitcpio.d/          # phải có preset khớp kernel trên
+> ```
+
+Sau khi blacklist xong (và build lại nếu cần) thì reboot:
+
+```bash
 sudo reboot
 ```
 
-Sau reboot, `lsmod | grep spd5118` phải không có dòng nào.
+Rồi kiểm:
+
+```bash
+lsmod | grep spd5118            # phải không có dòng nào
+openrgb -l | grep Kingston      # phải thấy RAM
+```
 
 > Cần `spd5118` cho việc khác thì đổi sang service `rmmod` lúc boot. Nhưng
 > `rmmod` chỉ có tác dụng khi module được nạp lại, còn blacklist chặn từ gốc —
@@ -105,10 +174,10 @@ cp local/bin/apply-rgb ~/.local/bin/
 cp schemes/*.rgb ~/.config/openrgb/schemes/
 chmod +x ~/.local/bin/apply-rgb ~/.local/lib/*.sh
 
-# KHÔNG copy đè config.json: file đó chứa màu LED và device ID của máy này.
-# Chỉ copy khi máy chưa có, còn không giữ nguyên.
-[ -e ~/.config/lianli/config.json ] || cp lianli/config.json ~/.config/lianli/
-cp lianli/rgb_presets.json ~/.config/lianli/
+# KHÔNG copy đè 2 file JSON: chúng chứa cấu hình riêng của máy này.
+# Chỉ copy khi máy chưa có, còn không thì giữ nguyên.
+[ -e ~/.config/lianli/config.json ]      || cp lianli/config.json      ~/.config/lianli/
+[ -e ~/.config/lianli/rgb_presets.json ] || cp lianli/rgb_presets.json ~/.config/lianli/
 
 # --- Group `lianli` + 2 file lock ---
 #
@@ -138,10 +207,19 @@ sudo udevadm trigger --subsystem-match=hidraw
 `"$APPLY_RGB"`, và cả hai unit đều đặt `ExecStart=` trỏ vào wrapper. Thiếu `+x`
 là `Permission denied` ngay lúc service khởi động.
 
-**Vì sao không copy đè `config.json`.** File trong repo là của máy tham chiếu.
-Màu LED bạn đang để nằm ở `rgb.devices[].effect_memory`, và lệnh copy sẽ xoá
-mất nó. Device ID thì daemon tự sửa lại được, còn màu thì không — phải chạy
-`apply-rgb` lại. Muốn cài lại từ đầu thì `rm` file cũ đi trước.
+**Vì sao không copy đè 2 file JSON trong `lianli/`.** Chúng là cấu hình riêng của
+máy tham chiếu, không phải template:
+
+- `config.json` — màu LED nằm ở `rgb.devices[].zones[].effect.colors`, lệnh copy
+  sẽ xoá mất màu bạn đang để. Device ID thì daemon tự sửa lại được, còn màu thì
+  không — phải chạy `apply-rgb` lại.
+- `rgb_presets.json` — là bảng màu bạn tự tạo trong GUI. Copy đè là mất.
+
+Cài lại từ đầu thì `rm` file cũ đi trước:
+
+```bash
+rm ~/.config/lianli/config.json ~/.config/lianli/rgb_presets.json
+```
 
 #### Vì sao phải tự cài 2 file rule
 
@@ -247,8 +325,14 @@ sudo loginctl enable-linger "$(id -un)"   # để service lên trước lúc đ�
 
 systemctl --user daemon-reload
 systemctl --user enable --now openrgb.service lianli-daemon.service
+```
 
-openrgb -l                            # phải thấy đủ 4 mục
+`openrgb` cần ~10s để dò xong 4 controller (wrapper poll mỗi 3s), nên `openrgb -l`
+chạy ngay sẽ **trả về rỗng** — đó không phải lỗi. Theo dõi tới khi nó báo OK:
+
+```bash
+journalctl --user -t openrgb-wrapper -f     # chờ dòng "OK: 4 controllers"
+openrgb -l                                  # sau đó phải thấy đủ 4 mục
 ```
 
 Lệnh nào cũng phải có `--user`. Máy này có **hai** unit cùng tên
@@ -263,10 +347,9 @@ systemctl is-active openrgb.service          # inactive — ĐÚNG, đây là b�
 systemctl --user is-active openrgb.service   # active   — bản này mới là bản đang chạy
 ```
 
-`~/.config/systemd/user/` cũng đè lên bản của gói, nên `lianli-daemon.service`
-trong repo phải là bản sao **đầy đủ** chứ không phải drop-in. Nếu gói nâng cấp
-thì bản trong `~/.config/` vẫn thắng, nên nhớ đồng bộ lại từ
-`/usr/lib/systemd/user/lianli-daemon.service`.
+`~/.config/systemd/user/` đè lên bản của gói ở cả hai tên unit, nên
+`lianli-daemon.service` trong repo phải là bản sao **đầy đủ** chứ không phải
+drop-in — xem [Ghi chú](#ghi-chú).
 
 Dùng phần cứng khác máy tham chiếu thì để daemon tự sinh `config.json` rồi chỉnh
 theo tài liệu upstream. Lần chạy đầu daemon sẽ tự sửa device ID về ID thật và
@@ -274,47 +357,63 @@ báo `Migrating wired device identities`.
 
 ### 6. Xác minh
 
-Chạy hết 8 dòng này. Không dòng nào được báo lỗi thì cài đặt đã đúng.
+Chạy hết 9 lệnh này. Lệnh nào không khớp với cột "kỳ vọng" thì cài đặt chưa xong.
+
+| # | Lệnh | Kỳ vọng |
+|---|------|---------|
+| 1 | `getent group lianli` | `lianli:x:957:<bạn>` |
+| 2 | `ls -l /run/lianli-*.lock` | 2 file, `root root`, `rw-rw-rw-` |
+| 3 | `systemctl --user is-active openrgb.service lianli-daemon.service` | `active` ×2 |
+| 4 | `openrgb -l` | đủ 4 mục |
+| 5 | `journalctl --user -t openrgb-wrapper -n 20 --no-pager \| grep 'OK:'` | có dòng `OK: 4 controllers` |
+| 6 | `journalctl --user -u lianli-daemon -n 20 --no-pager \| grep 'shared daemon lock'` | `Acquired shared daemon lock` |
+| 7 | `ls -l /dev/hidraw1 /dev/hidraw10` | `root:i2c` rồi `root:lianli` |
+| 8 | `id -nG \| grep -E '^(i2c\|lianli)$'` | thấy cả hai — **chỉ sau khi login lại** |
+| 9 | vòng `for` bên dưới | 7 dòng `OK`, không `FAIL` |
 
 ```bash
-getent group lianli                                    # lianli:x:957:...
-ls -l /run/lianli-daemon.lock /run/lianli-control.lock # root root, rw-rw-rw-
+getent group lianli
+ls -l /run/lianli-daemon.lock /run/lianli-control.lock
 systemctl --user is-active openrgb.service lianli-daemon.service
-openrgb -l                                             # đủ 4 mục
+openrgb -l
 journalctl --user -t openrgb-wrapper -n 20 --no-pager | grep 'OK:'
 journalctl --user -u lianli-daemon -n 20 --no-pager | grep 'shared daemon lock'
+ls -l /dev/hidraw1 /dev/hidraw10
+id -nG | grep -E '^(i2c|lianli)$'
 for s in white rainbow breath red xanhtim vangxanh daquang2; do
   apply-rgb "$s" && echo "$s OK" || echo "$s FAIL"
 done
 ```
 
-Kết quả đo được trên máy tham chiếu sau khi cài:
+Kết quả đo thật trên máy tham chiếu:
 
 ```
-lianli-daemon.service: active
-openrgb.service: active
+lianli:x:957:frost-auslese
+-rw-rw-rw- 1 root root 0 ... /run/lianli-control.lock
+-rw-rw-rw- 1 root root 6 ... /run/lianli-daemon.lock
+active
+active
 0: Kingston Fury DDR5 DRAM
 1: Sapphire Radeon RX 7800 XT Nitro+
 2: Lian Li Uni Hub - SL
 3: ASUS ROG STRIX Z690-A GAMING WIFI
 openrgb-wrapper: OK: 4 controllers (Kingston present); applied scheme 'white'
 lianli_daemon::pidlock: Acquired shared daemon lock at /run/lianli-daemon.lock
-lianli_daemon::service::init: Opened ENE 6K77 SL/AL Fan Controller as fan device: hid:0cf2:a100:1-13.3
-white OK / rainbow OK / breath OK / red OK
-xanhtim OK / vangxanh OK / daquang2 OK        (7/7 scheme, exit 0)
+crw-rw----+ 1 root i2c    240,  1 ... /dev/hidraw1
+crw-rw----+ 1 root lianli 240, 10 ... /dev/hidraw10
+i2c
+lianli
+white OK  rainbow OK  breath OK  red OK
+xanhtim OK  vangxanh OK  daquang2 OK
 ```
 
-Dòng `bỏ qua [2] Lian Li Uni Hub - SL` hiện ra giữa các scheme là **đúng** —
-xem [Lian Li hub](#lian-li-hub).
+Lệnh 3 in đúng hai dòng chữ `active` — `systemctl is-active` không kèm tên unit.
+Dòng `bỏ qua [2] Lian Li Uni Hub - SL` xen giữa các scheme là **đúng**, xem
+[Lian Li hub](#lian-li-hub).
 
-Daemon cần ~10s để dò xong thiết bị, nên `openrgb -l` ngay sau `enable --now`
-có thể trả về rỗng. Đợi vài giây rồi thử lại, hoặc:
-
-```bash
-journalctl --user -t openrgb-wrapper -f
-```
-
-Còn `id -nG | grep -E '^(i2c|lianli)$'` thì kiểm **sau khi đăng nhập lại**, xem
+Lệnh 8 là lệnh duy nhất **phải đăng nhập lại** mới đúng: `usermod` chỉ ghi
+`/etc/group`, còn `systemd --user` đang chạy thì giữ group cũ. Trước khi login
+lại, service vẫn chạy được nhờ ACL `uaccess` — xem
 [Node hidraw vẫn root:root](#node-hidraw-vẫn-rootroot).
 
 ---
@@ -391,14 +490,17 @@ Mode không phải thiết bị nào cũng có, nên mới cần section riêng:
 
 | Triệu chứng | Nguyên nhân | Cách sửa |
 |-------------|-------------|----------|
-| `Failed to read '/usr/lib/tmpfiles.d/lianli.conf'` | gói AUR không ship file này | xem [Vì sao phải tự cài 2 file rule](#vì-sao-phải-tự-cài-2-file-rule) |
+| `Failed to read '/usr/lib/tmpfiles.d/lianli.conf'` | gói AUR không ship file này | [Bước 4 → Vì sao phải tự cài 2 file rule](#vì-sao-phải-tự-cài-2-file-rule) |
 | `usermod: group 'lianli' does not exist` | chưa có group `lianli` | `sudo systemd-sysusers /usr/lib/sysusers.d/lianli.conf` rồi chạy lại `usermod` |
-| `Shared daemon lock /run/lianli-daemon.lock is unavailable` | thiếu tmpfiles rule → daemon restart loop | như dòng đầu, rồi `systemctl --user restart lianli-daemon` |
-| `/dev/hidrawN` của Lian Li là `root:root` | udev nạp rule trước khi có group | xem [Node hidraw vẫn root:root](#node-hidraw-vẫn-rootroot) |
-| `openrgb -l` không thấy Kingston | `spd5118` còn giữ bus SPD | blacklist + `mkinitcpio -P` + reboot |
-| `! openrgb failed for [2] zone=all` rồi restart lặp lại | `apply-rgb` set `static` lên hub (abort) | xem [Lian Li hub](#lian-li-hub) |
+| `usermod: group 'i2c' does not exist` | bỏ qua Bước 1, hoặc chưa nạp sysusers | `sudo pacman -S i2c-tools && sudo systemd-sysusers` rồi chạy lại `usermod` |
+| `Shared daemon lock /run/lianli-daemon.lock is unavailable` | thiếu tmpfiles rule → daemon restart loop | `sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lianli.conf` rồi `systemctl --user restart lianli-daemon` |
+| `/dev/hidraw10` của Lian Li là `root:root` | udev nạp rule trước khi có group | [Bước 4 → Node hidraw vẫn root:root](#node-hidraw-vẫn-rootroot) |
+| `openrgb -l` không thấy Kingston | `spd5118` còn giữ bus SPD | [Bước 2](#2-nhường-bus-spd-cho-ram-ddr5) |
+| `! openrgb failed for [2] zone=all` rồi restart lặp lại | `apply-rgb` set `static` lên hub (abort) | [Lian Li hub](#lian-li-hub) |
 | `systemctl status openrgb` báo inactive | đang xem bản system của gói | thêm `--user`, xem [Bước 5](#5-bật-service) |
+| `openrgb -l` rỗng ngay sau `enable --now` | wrapper chưa dò xong (~10s) | chờ, xem [Bước 5](#5-bật-service) |
 | `no devices listed by openrgb -l` | service chưa lên | `systemctl --user status openrgb` |
+| `Permission denied` lúc service khởi động | thiếu `chmod +x` cho wrapper | chạy lại dòng `chmod +x` ở [Bước 4](#4-copy-file-và-cấp-quyền) |
 
 Những dòng log này **bình thường, đừng điều tra**:
 
@@ -429,14 +531,27 @@ systemctl --user daemon-reload && systemctl --user restart lianli-daemon
 
 ### `evdi` trong Installation Health
 
-Panel Health báo ô *Optional display module: evdi* ở trạng thái **Failed** là
-chuyện bình thường ở đây. `evdi` tạo màn hình ảo để đẩy desktop lên **LCD của
-hub** — mà Uni Hub SL không có LCD, và `config.json` để `lcds: []`. Tài liệu
-cũng nói thẳng: *"Ordinary fan/RGB control does not require an EVDI kernel
-module."* Máy chạy dwm/X11 cũng không dùng tới.
+`evdi` **không liên quan gì** tới RGB hay fan. Nó tạo màn hình ảo để đẩy desktop
+lên **LCD của hub** — mà Uni Hub SL không có LCD, và `config.json` để `lcds: []`.
+Tài liệu upstream nói thẳng: *"Ordinary fan/RGB control does not require an EVDI
+kernel module."* Máy chạy dwm/X11 cũng không dùng tới.
 
-Health hiện `Failed` (chứ không phải `N/A`) vì `evdi-dkms` **đã đăng ký** module
-nhưng DKMS chỉ build cho kernel có sẵn headers. Muốn xanh ô đó thì:
+`lianli-linux-git` kéo `evdi-dkms` làm phụ thuộc nên không tránh được. Nó **không
+ảnh hưởng** tới hai service này kể cả khi hỏng — cứ để nguyên. Trên máy tham
+chiếu nó build và load thành công:
+
+```bash
+$ dkms status | grep evdi
+evdi/1.15.1, 6.18.52-1-cachyos-lts, x86_64: installed
+evdi/1.15.1, 7.2.8-1-cachyos, x86_64: installed
+evdi/1.15.1, 7.2.8-lqx1-1-arisa, x86_64: installed     ← kernel đang chạy
+
+$ lsmod | grep -c '^evdi'
+1
+```
+
+Nếu kernel của bạn **chưa** có dòng khớp `uname -r` (thường là do lúc cài gói
+chưa có headers), ô Health sẽ báo `Failed` thay vì `N/A`. Khắc phục:
 
 ```bash
 sudo pacman -S linux-arisa-headers   # đổi theo kernel đang chạy
@@ -445,28 +560,23 @@ dkms status | grep evdi              # phải có dòng khớp uname -r
 ```
 
 Cài headers là hook `70-dkms-install.hook` tự gọi `dkms install`, nên không cần
-gọi tay. Hook không `modprobe` — vẫn phải modprobe hoặc reboot.
-
-Sau khi kernel headers có sẵn thì `evdi` sẽ load bình thường và ô Health xanh
-lại:
-
-```bash
-lsmod | grep -c '^evdi'      # 1 = đang load
-```
-
-Ô này **không ảnh hưởng gì tới RGB hay fan** kể cả khi `Failed`.
+gọi tay. Hook không `modprobe` — vẫn phải modprobe hoặc reboot. Tên gói headers
+phải theo đúng kernel: `linux-cachyos-headers` cho `linux-cachyos`,
+`linux-arisa-headers` cho `linux-arisa`, v.v.
 
 ### Ghi chú
 
-- **Có GDM thì lúc boot daemon restart vài lần** rồi mới ổn định. Greeter chạy
-  session tạm nên daemon không tìm thấy config. Không phải lỗi cấu hình.
+- **Máy không có display manager** (`systemctl get-default` → `graphical.target`,
+  không có `display-manager.service`), chạy dwm trên X11. Nhờ vậy service không
+  phụ thuộc phiên đồ hoạ. Đây cũng là lý do `lianli-daemon.service` trong repo
+  phải là **bản sao đầy đủ**, không phải drop-in: package unit có
+  `After=` + `PartOf=graphical-session.target`, mà systemd không cho drop-in xoá
+  `PartOf=` — nên daemon sẽ bị stop mỗi lần logout nếu chỉ override một phần.
+  Bản trong `~/.config/systemd/user/` thắng bản của gói, nên nhớ đồng bộ lại từ
+  `/usr/lib/systemd/user/lianli-daemon.service` sau khi nâng cấp gói.
 - **`rgb.openrgb_port`** không được dùng khi `rgb.openrgb_server: false` — lúc đó
   daemon tự điều khiển hub, không qua OpenRGB server. Chỉ đổi khi bật
   `openrgb_server: true`.
-- **Unit của `lianli-daemon`** phải copy nguyên file vào `~/.config/systemd/user/`
-  chứ không dùng drop-in: systemd không cho drop-in xoá `After=` và
-  `PartOf=graphical-session.target` của package unit. Nhờ vậy daemon không bị
-  stop khi logout.
 
 ---
 
