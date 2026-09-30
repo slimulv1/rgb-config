@@ -12,14 +12,18 @@ Cấu hình RGB lighting cho máy **Core64** dành cho hai hệ: **OpenRGB** (đ
 |---|----------|------|-------------|
 | 0 | **Kingston Fury DDR5** | RAM | `Kingston Fury DDR5 DRAM` |
 | 1 | **Sapphire RX 7800 XT Nitro+** | GPU | `Sapphire Radeon RX 7800 XT Nitro+` |
-| 2 | **ASUS ROG STRIX Z690-A** | Mainboard | `ASUS ROG STRIX Z690-A GAMING WIFI` |
+| 2 | **Lian Li Uni Hub SL** | Cooler | `Lian Li Uni Hub - SL` — **xem bảng bên dưới, KHÔNG set màu qua `apply-rgb`** |
+| 3 | **ASUS ROG STRIX Z690-A** | Mainboard | `ASUS ROG STRIX Z690-A GAMING WIFI` |
+
+> `apply-rgb` chỉ set 3 thiết bị đầu. Mục 2 bị bỏ qua có chủ ý — xem
+> [Bước 6](#bước-6--cấp-quyền-truy-cập-device).
 
 ### Thiết bị khác
 
 | Thiết bị | Điều khiển | Ghi chú |
 |----------|------------|---------|
 | **Deepcool LT720 AIO** (pump) | Nối **ARGB Header 1** mainboard → qua zone ASUS (zone 1, cần resize `SIZE=22`) | Pump có RGB; **fan FK120 KHÔNG có RGB** |
-| **Lian Li Uni Hub SL v1 + 5× fan SL120 v1** | `lianli-daemon` (USB `0cf2:a100` = ENE LianLi-UNI FAN-SL-v1.8, hidraw) | Điều khiển fan hub + LED fan SL120, KHÔNG qua OpenRGB |
+| **Lian Li Uni Hub SL v1 + 5× fan SL120 v1** | `lianli-daemon` (USB `0cf2:a100` = ENE LianLi-UNI FAN-SL-v1.8, hidraw) | Điều khiển fan hub + LED fan SL120. Màu đặt trong `~/.config/lianli/config.json` (`rgb.devices`, 4 nhóm). Hub **có** xuất hiện trong `openrgb -l` nhưng **không** được set qua `apply-rgb` — mode `static` của nó làm openrgb abort |
 
 ---
 
@@ -142,6 +146,9 @@ sudo systemctl enable --now rmmod-spd5118.service
 ### Bước 3 — Cài đặt OpenRGB và Lian Li
 
 ```bash
+# mbedtls3 — BẮT BUỘC, thiếu thì openrgb không chạy được
+sudo pacman -S mbedtls3
+
 # OpenRGB (bản git — khớp repo này, 0.9+)
 sudo pacman -S openrgb-git            # hoặc: paru -S openrgb-git
 
@@ -151,6 +158,66 @@ yay -S lianli-linux-git
 
 > 📚 Lian Li Linux: [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux)
 > ⚠️ Sau khi cài, `lianli-daemon` phải có trong `PATH` (`which lianli-daemon`).
+
+#### ⚠️ Vì sao `mbedtls3` là bắt buộc
+
+OpenRGB **không chạy được với mbedtls 4.x**. Chính `OpenRGB.pro` của upstream ghi
+rõ: *"OpenRGB depends on mbedtls 3.x and will not work with mbedtls 4.x"*.
+
+Gói `mbedtls` (4.x) cung cấp `libmbedx509.so.9` / `.so.23` / `.so.18`, còn các
+bản openrgb trong kho — kể cả `openrgb-git` CachyOS lẫn bản `1.0.53` trong repo
+arisa, và cả `openrgb` 1.0-2 từ `extra` — đều link `.so.7` / `.so.21` / `.so.16`.
+Không có gói nào trong ba kho đó build lại với soname mới.
+
+Triệu chứng, không cần đoán:
+
+```
+$ openrgb -l
+openrgb: error while loading shared libraries: libmbedx509.so.7: cannot open shared object file
+```
+
+`mbedtls3` cài **song song** với `mbedtls` 4.x, đặt ở `/usr/include/mbedtls3` và
+`/usr/lib/mbedtls3` nên không xung đột — không cần gỡ `mbedtls`.
+
+> Sau khi cài, kiểm bằng `openrgb -l`. Nếu vẫn lỗi thư viện thì xem `ldd /usr/bin/openrgb | grep mbed`.
+
+#### ⚠️ `lianli-linux-git` bản repo arisa bị thiếu file
+
+Bản trong repo `arisa` build không đủ file so với PKGBUILD AUR gốc. Kiểm trước
+sau khi cài:
+
+```bash
+# 1. tmpfiles rule — THIẾU THÌ DAEMON KHÔNG KHỞI ĐỘNG
+test -f /usr/lib/tmpfiles.d/lianli.conf || echo "THIEU"
+
+# 2. lianli-control — công cụ mà tài liệu upstream chỉ định dùng
+command -v lianli-control || echo "THIEU"
+```
+
+Nếu thiếu `lianli.conf`, tạo đúng nội dung từ upstream rồi kích hoạt:
+
+```bash
+sudo tee /usr/lib/tmpfiles.d/lianli.conf > /dev/null <<'EOF'
+# These root-owned files allow every daemon/control account to share the same flocks.
+f /run/lianli-daemon.lock 0666 root root - -
+f /run/lianli-control.lock 0666 root root - -
+EOF
+sudo chmod 644 /usr/lib/tmpfiles.d/lianli.conf
+sudo systemd-tmpfiles --create lianli.conf
+```
+
+Triệu chứng khi thiếu, daemon restart liên tục không dừng:
+
+```
+Error: Shared daemon lock /run/lianli-daemon.lock is unavailable; refusing to start
+       a competing hardware owner. Install the tmpfiles rule on the host and run
+       `sudo systemd-tmpfiles --create lianli.conf`.
+```
+
+`lianli-session` và `lianli-session.service` cũng thiếu, nhưng **không ảnh hưởng**
+RGB/fan — theo `docs/desktop-backends.md`, `lianli-session` chỉ cần cho desktop
+mode. Thiếu `lianli-control` thì mất `lianli-control inspect-state` và
+`diagnose`; xác minh bằng `RUST_LOG` thay thế, xem cuối README.
 
 ---
 
@@ -235,11 +302,29 @@ Nếu thiếu rule này, OpenRGB chỉ mở được AURA sau khi user đăng nh
 
 ```bash
 openrgb -l
-# kỳ vọng:
-#   0: Kingston Fury DDR5 DRAM
+# kỳ vọng — 4 mục, không phải 3:
+#   0: Kingston Fury DDR5 DRAM          ← chỉ có sau khi blacklist spd5118 + reboot
 #   1: Sapphire Radeon RX 7800 XT Nitro+
-#   2: ASUS ROG STRIX Z690-A GAMING WIFI
+#   2: Lian Li Uni Hub - SL             ← xem ghi chú bên dưới
+#   3: ASUS ROG STRIX Z690-A GAMING WIFI
 ```
+
+> ⚠️ **OpenRGB liệt kê cả Lian Li hub ở mục 2**, dù hub do `lianli-daemon` điều
+> khiển chứ không phải OpenRGB. Vì `apply-rgb` áp key global cho **mọi** thiết bị
+> trong danh sách nên nó sẽ gửi `-m static` vào hub — mà mode đó làm client
+> **abort**:
+>
+> ```
+> $ openrgb -d 2 -m static -c FFFFFF   →  rc=134 (SIGABRT)
+> $ openrgb -d 2 -m Rainbow            →  rc=0
+> ```
+>
+> Bỏ `-b` vẫn abort, nên không phải do tham số brightness. `apply-rgb` đã có
+> sẵn danh sách bỏ qua (`APPLY_RGB_SKIP`, mặc định `Lian Li`) — xem "Cách dùng".
+> Nếu `apply-rgb` báo `openrgb failed for [2] zone=all` là đang thiếu bước này.
+>
+> `EXPECT_CONTROLLERS` trong `openrgb-wrapper.sh` mặc định là 3 và so `>=`, nên
+> 4 thiết bị vẫn pass. RAM là điều kiện còn lại: `grep -qi Kingston` phải khớp.
 
 **Đổi màu nhanh (không cần boot service):**
 
@@ -247,6 +332,11 @@ openrgb -l
 apply-rgb white       # mặc định
 apply-rgb --list      # liệt kê scheme
 ```
+
+> 💡 `apply-rgb` cần OpenRGB server đang chạy. Nếu service chưa lên hoặc đang
+> restart, `openrgb -l` trả về 0 thiết bị và `apply-rgb` báo
+> `error: no devices listed by openrgb -l`. Kiểm tra
+> `systemctl --user status openrgb` trước.
 
 ### Bước 7 — Cấu hình Lian Li (device + fan curve)
 
@@ -279,11 +369,12 @@ systemctl --user status lianli-daemon.service
 
 # log xác nhận OpenRGB đã apply scheme
 journalctl -b | grep openrgb-wrapper
-# kỳ vọng: OK: 3 controllers; applied scheme 'white'
+# kỳ vọng: OK: 4 controllers (Kingston present); applied scheme 'white'
 
 # log xác nhận Lian Li ready (không cần đợi login)
 journalctl -b | grep lianli-wrapper
 # kỳ vọng: /dev/hidraw10 ready (after Ns)  — N bé (0–5s)
+# và:  Starting fan control: 1 curve(s), 2 group(s)
 ```
 
 > ℹ️ `systemd/lianli-daemon.service` trong repo là **full override unit** (sao chép nguyên file vào `~/.config/systemd/user/`). Nó bỏ `After=`/`PartOf=graphical-session.target` của package unit — drop-in KHÔNG xóa được các dependency này (systemd merge semantics), nên cần override unit. Lợi ích: daemon **không bị stop khi logout** và không phụ thuộc vào việc session đã mở chưa. Khi nâng cấp package `lianli-linux-git`, override unit vẫn win (user unit ưu tiên hơn package unit).
@@ -291,6 +382,23 @@ journalctl -b | grep lianli-wrapper
 > ℹ️ Các dòng sau trong log là **bình thường, đừng coi là lỗi**:
 > `Dialog Warning: One or more I2C/SMBus interfaces failed to initialize` (một số bus SMBus không tồn tại) và
 > `NetworkServer recv_select failed ... closing listener` (client ngắt kết nối) — bỏ qua.
+>
+> Thêm nữa, driver Kingston hay in dòng dạng
+> `[Kingston Fury DDR4/5 DRAM] 61 failed to set register &30=01` — đây là
+> controller DDR5 từ chối một số thanh ghi, wrapper vẫn coi là thành công. Đừng
+> điều tra trừ khi đèn RAM hiển thị sai.
+
+> ⚠️ **`Segmentation fault (core dumped)` thì KHÔNG bình thường.** Dòng đó xuất
+> hiện khi `openrgb --server` chết, và client sẽ nhận `controller count: 0`. Lúc
+> đó `apply-rgb` chạy được (đọc device trực tiếp) nhưng service không bao giờ
+> ổn định. Kiểm tra `ldd /usr/bin/openrgb | grep -i 'not found'` — thường là
+> thiếu `mbedtls3` xem Bước 3.
+
+> ℹ️ **Nếu có GDM**: lúc boot, greeter của GDM spawn `lianli-daemon` dưới uid
+> tạm của seat0, daemon không tìm thấy config nên fail và retry mỗi 5 s — vài
+> lần rồi ổn định khi session thật chiếm seat0. Đó là hệ quả của việc cài GDM,
+> không phải lỗi cấu hình. Nếu chỉ dùng TTY thì `loginctl enable-linger` là
+> đủ, không cần GDM.
 
 ---
 
@@ -308,6 +416,24 @@ apply-rgb xanhtim      # xanh dương
 apply-rgb vangxanh     # cam
 apply-rgb --list       # liệt kê scheme
 ```
+
+### Bỏ qua thiết bị không muốn OpenRGB đụng tới
+
+```bash
+# mặc định: bỏ qua "Lian Li" — hub do lianli-daemon điều khiển
+apply-rgb white
+
+# ghi đè danh sách, phân tách bằng dấu phẩy
+APPLY_RGB_SKIP="Lian Li,Máy quạt khác" apply-rgb white
+```
+
+Danh sách khớp theo **tên substring** trong `openrgb -l`. Bỏ qua rồi thì dòng
+`bỏ qua [N] <tên> (do <X> điều khiển)` hiện ra, và `apply-rgb` trả 0 nếu mọi
+thiết bị còn lại đều set thành công.
+
+Bắt buộc phải bỏ qua Lian Li hub: mode `static` của nó làm `openrgb` abort
+(rc=134), `apply-rgb` trả 1, wrapper `exit 1`, mà `openrgb.service` có
+`Restart=always` — thành restart vô hạn. Chi tiết ở Bước 6.
 
 ### Tạo/đổi scheme mới
 
@@ -351,6 +477,42 @@ Không phải device nào cũng hỗ trợ mọi mode — lý do cần section p
 | `Rainbow` | ✅ | ❌ (dùng `rainbow wave`) | ✅ |
 | `breath`/`breathing` | `breath` | ❌ (fallback `static`) | `breathing` |
 | `Spectrum` | ✅ | `spectrum cycle` | `spectrum cycle` |
+
+---
+
+## 🔎 Xác minh không có `lianli-control`
+
+Bản `lianli-linux-git` trong repo arisa không có `lianli-control` (thiếu cả
+`inspect-state` và `diagnose` mà tài liệu upstream chỉ định). Xác minh thay
+bằng `RUST_LOG` — daemon đọc biến này:
+
+```bash
+# bật tạm, xem daemon có thật sự ghi LED không
+mkdir -p ~/.config/systemd/user/lianli-daemon.service.d
+cat > ~/.config/systemd/user/lianli-daemon.service.d/debug.conf <<'EOF'
+[Service]
+Environment=RUST_LOG=info,lianli_devices=debug
+EOF
+systemctl --user daemon-reload && systemctl --user restart lianli-daemon
+journalctl --user -u lianli-daemon -n 30 --no-pager | grep -i 'set group'
+
+# xong thì gỡ, log debug rất ồn
+rm ~/.config/systemd/user/lianli-daemon.service.d/debug.conf
+systemctl --user daemon-reload && systemctl --user restart lianli-daemon
+```
+
+Màu hiện ra phải khớp `~/.config/lianli/config.json`. Mức `info` **không** in dòng
+RGB — đó là lý do log trông như chưa chạy dù LED có đổi.
+
+## ❓ `openrgb_port` trong config lianli
+
+`~/.config/lianli/config.json` có `rgb.openrgb_server: false`, nghĩa là
+`lianli-daemon` tự điều khiển hub và **không** đi qua OpenRGB server — trường
+`rgb.openrgb_port` khi đó không được dùng. Chỉ đổi nó khi bật
+`openrgb_server: true`; khi đó điền cổng OpenRGB thật (`ss -tlnp | grep openrgb`,
+thường là 6742).
+
+`local/bin/apply-rgb` không nên đụng tới hub — xem "Bỏ qua thiết bị".
 
 ---
 

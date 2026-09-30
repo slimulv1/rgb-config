@@ -38,6 +38,26 @@ DEFAULT_SCHEME="${OPENRGB_DEFAULT_SCHEME:-white}"
 OPENRGB="${OPENRGB_BIN:-openrgb}"
 VERBOSE="${APPLY_RGB_VERBOSE:-0}"
 CMD_TIMEOUT="${OPENRGB_TIMEOUT:-15}"
+# Danh sách tên thiết bị cần BỎ QUA, phân tách bằng dấu phẩy.
+#
+# Vì sao: Lian Li Uni Hub do `lianli-daemon` điều khiển, không phải OpenRGB
+# (xem README, bảng "Các thiết bị RGB đang dùng": "KHÔNG qua OpenRGB"). Nhưng
+# OpenRGB vẫn liệt kê nó ở `openrgb -l`, và script này áp key global cho MỌI
+# thiết bị trong danh sách — không có bước bỏ qua nào.
+#
+# Hậu quả nếu không bỏ qua, đo được trên máy thật:
+#   - mode `static` của hub làm client ABORT, không phải trả mã lỗi:
+#       $ openrgb -d 2 -m static -c FFFFFF   →  rc=134 (SIGABRT)
+#       $ openrgb -d 2 -m Rainbow            →  rc=0
+#     Nên `static` mới là thứ hỏng, không phải tham số brightness — bỏ -b đi
+#     vẫn abort.
+#   - FAILED=1 → apply-rgb exit 1 → openrgb-wrapper.sh ghi
+#     "FAIL apply-rgb" rồi exit 1, mà unit có Restart=always → restart vô hạn.
+#   - Thêm nữa, lianli-daemon và OpenRGB cùng ghi vào một hub, tức hai chủ.
+#
+# Ghi đè được qua biến môi trường, ví dụ bỏ qua cả thêm:
+#   APPLY_RGB_SKIP="Lian Li,Some Other Fan" apply-rgb white
+SKIP="${APPLY_RGB_SKIP:-Lian Li}"
 
 usage() {
     echo "Usage: apply-rgb [--list | <scheme>]"
@@ -172,7 +192,14 @@ apply_device() {
 }
 
 for dev in "${DEVICES[@]}"; do
-    apply_device "${dev%%:*}" "${dev#*: }"
+    idx="${dev%%:*}"
+    name="${dev#*: }"
+    # Bỏ qua thiết bị nằm trong $SKIP — xem giải thích ở biến SKIP.
+    if [[ -n $SKIP && $name == *"$SKIP"* ]]; then
+        printf '  bỏ qua [%s] %s (do %s điều khiển)\n' "$idx" "$name" "${SKIP%%,*}" >&2
+        continue
+    fi
+    apply_device "$idx" "$name"
 done
 
 exit "$FAILED"
