@@ -68,32 +68,27 @@ Sau reboot, `lsmod | grep spd5118` phải không có dòng nào.
 ### 3. Gói phần mềm
 
 ```bash
-paru -S openrgb-git lianli-linux-git
+sudo pacman -S openrgb
+paru -S lianli-linux-git
 ```
 
-Hai gói nằm trong AUR, `paru` tự kéo phụ thuộc. Riêng **`mbedtls3` là bắt
-buộc**: OpenRGB chỉ chạy với mbedtls 3.x, còn Arch đang ở 4.x. Gói này đặt thư
-viện vào `/usr/lib/mbedtls3/` rồi thả symlink tương thích vào `/usr/lib`, nên
-binary openrgb vẫn tìm thấy. Hai gói không đụng file nhau — không cần gỡ
-`mbedtls` 4.x đi.
-
-> `paru -S <gói>` sẽ lấy bản trong kho sync nếu kho đó có đúng tên gói, lúc đó
-> **không** build từ AUR. Ép build thì thêm `-a`: `paru -a -S <gói>`.
-
-Máy tham chiếu đang chạy `openrgb 1.0-2.1` từ kho nhị phân chứ không phải
-`openrgb-git`, và `mbedtls3` vẫn có sẵn vì gói đó khai báo nó là phụ thuộc cứng:
+`openrgb` lấy từ kho nhị phân, không phải AUR. Đừng dùng `openrgb-git` trong AUR:
+bản đó build với mbedtls 4.x còn OpenRGB chỉ chạy được với mbedtls 3.x. Gói
+`openrgb` của kho chính đã khai báo `mbedtls3` là phụ thuộc cứng nên `pacman`
+tự kéo theo — không cài thêm gì:
 
 ```bash
-$ pacman -Qi openrgb | grep 'Depends On'
-Depends On  : ... mbedtls3 ...
+$ pacman -Qi openrgb | grep -E '^(Name|Version|Depends)'
+Name        : openrgb
+Version     : 1.0-2.1
+Depends On  : glibc libgcc libstdc++ qt6-base libusb hidapi mbedtls3 hicolor-icon-theme
 ```
-
-Nên nếu `openrgb -l` chạy được thì không cần làm gì thêm. Nếu lỡ gặp
-`error while loading shared libraries: libmbedx509.so.7` thì
-`sudo pacman -S mbedtls3`.
 
 `lianli-linux-git` kéo theo `evdi-dkms` và `ffmpeg` làm phụ thuộc. `evdi` ở
 đây **không cần thiết** cho fan/RGB — xem [mục evdi](#evdi-trong-installation-health).
+
+> `paru -S <gói>` sẽ lấy bản trong kho sync nếu kho đó có đúng tên gói, lúc đó
+> **không** build từ AUR. Ép build thì thêm `-a`: `paru -a -S <gói>`.
 
 ### 4. Copy file và cấp quyền
 
@@ -257,11 +252,16 @@ openrgb -l                            # phải thấy đủ 4 mục
 ```
 
 Lệnh nào cũng phải có `--user`. Máy này có **hai** unit cùng tên
-`openrgb.service`: gói `openrgb-git` đặt một bản ở
-`/usr/lib/systemd/system/` (system, `disabled`), còn repo đặt bản user ở
-`~/.config/systemd/user/` (`enabled`). `systemctl status openrgb` không có
-`--user` sẽ ra bản system — đang `disabled`, trông như service chết trong khi
-bản đang chạy vẫn ổn.
+`openrgb.service`: gói `openrgb` đặt một bản ở `/usr/lib/systemd/system/`
+(system, `disabled`), còn repo đặt bản user ở `~/.config/systemd/user/`
+(`enabled`). `systemctl status openrgb` không có `--user` sẽ ra bản system —
+đang `disabled`/`inactive`, trông như service chết trong khi bản đang chạy vẫn
+ổn:
+
+```bash
+systemctl is-active openrgb.service          # inactive — ĐÚNG, đây là bản system
+systemctl --user is-active openrgb.service   # active   — bản này mới là bản đang chạy
+```
 
 `~/.config/systemd/user/` cũng đè lên bản của gói, nên `lianli-daemon.service`
 trong repo phải là bản sao **đầy đủ** chứ không phải drop-in. Nếu gói nâng cấp
@@ -397,7 +397,7 @@ Mode không phải thiết bị nào cũng có, nên mới cần section riêng:
 | `/dev/hidrawN` của Lian Li là `root:root` | udev nạp rule trước khi có group | xem [Node hidraw vẫn root:root](#node-hidraw-vẫn-rootroot) |
 | `openrgb -l` không thấy Kingston | `spd5118` còn giữ bus SPD | blacklist + `mkinitcpio -P` + reboot |
 | `! openrgb failed for [2] zone=all` rồi restart lặp lại | `apply-rgb` set `static` lên hub (abort) | xem [Lian Li hub](#lian-li-hub) |
-| `error while loading shared libraries: libmbedx509.so.7` | thiếu mbedtls 3.x | `sudo pacman -S mbedtls3` |
+| `systemctl status openrgb` báo inactive | đang xem bản system của gói | thêm `--user`, xem [Bước 5](#5-bật-service) |
 | `no devices listed by openrgb -l` | service chưa lên | `systemctl --user status openrgb` |
 
 Những dòng log này **bình thường, đừng điều tra**:
