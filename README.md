@@ -1,6 +1,6 @@
 # OpenRGB — RGB cho Core64
 
-Đổi màu đèn trên máy **Core64** bằng cách sửa một file text rồi chạy một lệnh.
+Đổi màu đèn trên máy bằng cách sửa một file text rồi chạy một lệnh.
 Không cần mở OpenRGB GUI, không cần load profile `.orp`.
 
 Hai hệ thống chạy song song:
