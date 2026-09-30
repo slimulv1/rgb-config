@@ -111,6 +111,11 @@ thư viện. Hai gói không đụng file nhau nên cài song song, không cần
 Bản AUR của `openrgb-git` đã khai báo sẵn dependency này. Nếu lỡ cài `openrgb`
 từ kho nhị phân thì phải tự thêm: `sudo pacman -S mbedtls3`.
 
+> ⚠️ `paru -S <gói>` sẽ lấy bản trong kho sync nếu kho đó có đúng tên gói — khi đó
+> nó **không** build từ AUR. Muốn ép build từ AUR thì thêm `-a`:
+> `paru -a -S <gói>`. Đã dính: `paru -S openrgb-git` lấy bản trong `cachyos`, còn
+> `paru -a -S lianli-linux-git` mới build thật.
+
 ### Bước 4 — Copy file, phân quyền, cấp quyền device
 
 ```bash
@@ -127,7 +132,7 @@ cp lianli/*.json ~/.config/lianli/
 cp schemes/*.rgb ~/.config/openrgb/schemes/
 chmod +x ~/.local/bin/apply-rgb ~/.local/lib/*.sh
 
-# áp sysusers.d ngay: nếu chưa, nhóm lianli chưa tồn tại và usermod sẽ fail
+# tạo sẵn 2 file lock trong /run, nếu không daemon phải đợi tới lần boot sau
 sudo systemd-sysusers
 sudo usermod -aG i2c,lianli $USER
 
@@ -136,9 +141,10 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-> Nhóm `lianli` do chính gói tạo qua `sysusers.d`, không phải tự tạo tay — nhưng
-> phải chạy `systemd-sysusers` một lần thì nó mới có. Bỏ dòng đó thì `usermod` báo
-> `group 'lianli' does not exist` và thoát, bạn mất quyền truy cập hub.
+> User `lianli` và nhóm cùng tên do hook cài gói tạo qua `sysusers.d`, nên
+> `usermod` không bị lỗi. Dòng `systemd-sysusers` ở trên tạo hai file lock
+> `/run/lianli-{daemon,control}.lock` — bỏ thì daemon phải chờ tới lần boot sau
+> mới lên được, vì rule trong `tmpfiles.d` chỉ chạy lúc boot.
 >
 > `usermod` chỉ ghi vào `/etc/group`, nên **thoát hẳn rồi đăng nhập lại** thì nhóm
 > mới có hiệu lực. Reboot ở Bước 2 không giúp được — nó nằm trước `usermod`.
