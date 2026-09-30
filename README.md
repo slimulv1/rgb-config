@@ -100,10 +100,16 @@ paru -S openrgb-git lianli-linux-git
 
 Hai gói này đều có trong AUR, `paru` tự lo phần phụ thuộc.
 
-> Nếu bạn cài `openrgb` từ kho nhị phân thay vì AUR, nhớ thêm
-> `sudo pacman -S mbedtls3` — OpenRGB chỉ chạy với mbedtls 3.x, còn kho
-> Arch đang ở 4.x. Gói `mbedtls3` nằm riêng ở `/usr/lib/mbedtls3` nên cài
-> song song, không phải gỡ gì cả. Bản AUR đã khai báo sẵn dependency này.
+**`mbedtls3` là bắt buộc.** OpenRGB chỉ chạy với mbedtls 3.x — chính
+`OpenRGB.pro` của upstream ghi rõ *"will not work with mbedtls 4.x"*, còn Arch
+đang ở 4.x. Gói `mbedtls3` đặt thư viện thật vào `/usr/lib/mbedtls3/` rồi thả
+symlink tương thích vào `/usr/lib` (`libmbedx509.so.7` →
+`/usr/lib/mbedtls3/libmbedx509.so.3.6.7`); nhờ vậy binary openrgb vẫn tìm thấy
+thư viện. Hai gói không đụng file nhau nên cài song song, không cần gỡ
+`mbedtls` 4.x.
+
+Bản AUR của `openrgb-git` đã khai báo sẵn dependency này. Nếu lỡ cài `openrgb`
+từ kho nhị phân thì phải tự thêm: `sudo pacman -S mbedtls3`.
 
 ### Bước 4 — Copy file, phân quyền, cấp quyền device
 
