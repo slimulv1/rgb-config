@@ -94,25 +94,48 @@ cp systemd/lianli-daemon.service.d/retry-open-acl.conf \
    ~/.config/systemd/user/lianli-daemon.service.d/
 cp local/lib/*.sh ~/.local/lib/
 cp local/bin/apply-rgb ~/.local/bin/
-cp lianli/*.json ~/.config/lianli/
 cp schemes/*.rgb ~/.config/openrgb/schemes/
 chmod +x ~/.local/bin/apply-rgb ~/.local/lib/*.sh
 
-# tạo sẵn hai file lock trong /run, nếu không daemon phải đợi tới lần boot sau
-sudo systemd-sysusers
-sudo usermod -aG i2c,lianli $USER
+# KHÔNG copy đè config.json: file đó chứa màu LED và device ID của máy này.
+# Chỉ copy khi máy chưa có, còn không giữ nguyên.
+[ -e ~/.config/lianli/config.json ] || cp lianli/config.json ~/.config/lianli/
+cp lianli/rgb_presets.json ~/.config/lianli/
+
+# tạo /run/lianli-{daemon,control}.lock nếu thiếu
+sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lianli.conf
+sudo usermod -aG i2c,lianli "$(id -un)"
 
 sudo cp udev/60-aura-led.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-User `lianli` và nhóm cùng tên do hook cài gói tạo qua `sysusers.d`. Dòng
-`systemd-sysusers` kia chỉ để tạo `/run/lianli-{daemon,control}.lock`, vì rule
-trong `tmpfiles.d` chỉ chạy lúc boot.
+`chmod +x` là bắt buộc, không phải cho đẹp: `openrgb-wrapper.sh` gọi thẳng
+`"$APPLY_RGB"`, và cả hai unit đều đặt `ExecStart=` trỏ vào wrapper. Thiếu `+x`
+là `Permission denied` ngay lúc service khởi động.
+
+**Vì sao không copy đè `config.json`.** File trong repo là của máy tham chiếu.
+Màu LED bạn đang để nằm ở `rgb.devices[].effect_memory`, và lệnh copy sẽ xoá
+mất nó. Device ID thì daemon tự sửa lại được, còn màu thì không — phải chạy
+`apply-rgb` lại. Muốn cài lại từ đầu thì `rm` file cũ đi trước.
+
+**Hai file lock trong `/run`** do `/usr/lib/tmpfiles.d/lianli.conf` tạo, nên
+lệnh phải là `systemd-tmpfiles`, không phải `systemd-sysusers` — cái sau chỉ
+lo `/etc/passwd` và `/etc/group`, không đụng `/run`. Lệnh ở trên còn chỉ đích
+danh đúng file của lianli, thay vì quét toàn bộ `tmpfiles.d` của hệ thống.
+
+Thực ra thường không cần chạy: `21-systemd-tmpfiles.hook` đã tạo sẵn lúc cài
+gói, và `/run` là tmpfs nên `systemd-tmpfiles-setup.service` tạo lại mỗi lần
+boot. Dòng này là để phòng khi cài lại mà không reboot.
 
 `usermod` chỉ ghi vào `/etc/group`, nên **thoát hẳn rồi đăng nhập lại** thì nhóm
 mới có hiệu lực. Reboot ở bước 2 không giúp được, vì nó nằm trước `usermod`.
+
+`udevadm trigger` bắn lại rule cho **mọi** node hidraw, không riêng node AURA —
+không thu hẹp được, vì `idVendor` nằm trên device chứ không nằm trên
+`/sys/class/hidraw/hidrawN/`, mà `--attr-match` chỉ đọc chỗ sau. Chạy lại rule
+cũ chỉ cho kết quả y hệt nên vô hại.
 
 `~/.local/bin` phải nằm trong `PATH` (`echo $PATH | grep .local/bin`). Nếu chưa
 có thì thêm vào `~/.bashrc`:
@@ -124,7 +147,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ### 5. Bật service
 
 ```bash
-sudo loginctl enable-linger $USER     # để service lên trước lúc đăng nhập
+sudo loginctl enable-linger "$(id -un)"   # để service lên trước lúc đăng nhập
 
 systemctl --user daemon-reload
 systemctl --user enable --now openrgb.service lianli-daemon.service
@@ -132,9 +155,21 @@ systemctl --user enable --now openrgb.service lianli-daemon.service
 openrgb -l                            # phải thấy đủ 4 mục
 ```
 
-`config.json` trong repo là của máy tham chiểu, chứa device ID riêng. Daemon tự
-sửa về ID thật khi chạy lần đầu (`Migrating wired device identities`); dùng phần
-cứng khác thì nên để daemon tự sinh config rồi chỉnh theo tài liệu upstream.
+Lệnh nào cũng phải có `--user`. Máy này có **hai** unit cùng tên
+`openrgb.service`: gói `openrgb-git` đặt một bản ở
+`/usr/lib/systemd/system/` (system, `disabled`), còn repo đặt bản user ở
+`~/.config/systemd/user/` (`enabled`). `systemctl status openrgb` không có
+`--user` sẽ ra bản system — đang `disabled`, trông như service chết trong khi
+bản đang chạy vẫn ổn.
+
+`~/.config/systemd/user/` cũng đè lên bản của gói, nên `lianli-daemon.service`
+trong repo phải là bản sao **đầy đủ** chứ không phải drop-in. Nếu gói nâng cấp
+thì bản trong `~/.config/` vẫn thắng, nên nhớ đồng bộ lại từ
+`/usr/lib/systemd/user/lianli-daemon.service`.
+
+Dùng phần cứng khác máy tham chiếu thì để daemon tự sinh `config.json` rồi chỉnh
+theo tài liệu upstream. Lần chạy đầu daemon sẽ tự sửa device ID về ID thật và
+báo `Migrating wired device identities`.
 
 ---
 
