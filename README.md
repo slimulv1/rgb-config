@@ -108,7 +108,7 @@ Hai gói này đều có trong AUR, `paru` tự lo phần phụ thuộc.
 ### Bước 4 — Copy file, phân quyền, cấp quyền device
 
 ```bash
-cd ~/rgb-config
+cd ~/rgb-config || exit 1
 mkdir -p ~/.config/systemd/user/lianli-daemon.service.d ~/.config/lianli \
          ~/.local/{lib,bin} ~/.config/openrgb/schemes
 
@@ -121,6 +121,8 @@ cp lianli/*.json ~/.config/lianli/
 cp schemes/*.rgb ~/.config/openrgb/schemes/
 chmod +x ~/.local/bin/apply-rgb ~/.local/lib/*.sh
 
+# áp sysusers.d ngay: nếu chưa, nhóm lianli chưa tồn tại và usermod sẽ fail
+sudo systemd-sysusers
 sudo usermod -aG i2c,lianli $USER
 
 sudo cp udev/60-aura-led.rules /etc/udev/rules.d/
@@ -128,10 +130,15 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-> Nhóm `lianli` do chính gói tạo qua `sysusers.d`, không phải tự tạo tay.
-> Phải **đăng xuất rồi đăng nhập lại** thì nhóm mới có hiệu lực — hoặc reboot ở Bước 2.
+> Nhóm `lianli` do chính gói tạo qua `sysusers.d`, không phải tự tạo tay — nhưng
+> phải chạy `systemd-sysusers` một lần thì nó mới có. Bỏ dòng đó thì `usermod` báo
+> `group 'lianli' does not exist` và thoát, bạn mất quyền truy cập hub.
+>
+> `usermod` chỉ ghi vào `/etc/group`, nên **thoát hẳn rồi đăng nhập lại** thì nhóm
+> mới có hiệu lực. Reboot ở Bước 2 không giúp được — nó nằm trước `usermod`.
 
-`~/.local/bin` phải nằm trong `PATH`:
+`~/.local/bin` phải nằm trong `PATH` (`echo $PATH | grep .local/bin`). Nếu chưa
+có thì thêm vào `~/.bashrc` hoặc `~/.zshrc`:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
@@ -145,15 +152,14 @@ systemctl --user daemon-reload
 systemctl --user enable --now openrgb.service lianli-daemon.service
 ```
 
-### Bước 6 — Đổi màu lần đầu
+### Bước 6 — Kiểm tra
 
 ```bash
 openrgb -l                    # phải thấy đủ 4 mục
-systemctl --user enable --now openrgb.service
-apply-rgb white
+apply-rgb white               # thử đổi màu
 ```
 
-Màu mặc định đã được wrapper áp lúc boot, nên bước này chỉ để chắc.
+Màu mặc định đã được wrapper áp lúc boot, nên `apply-rgb` ở đây chỉ để thử tay.
 
 ### Bước 7 — Cấu hình Lian Li
 
