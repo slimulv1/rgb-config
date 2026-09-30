@@ -77,10 +77,23 @@ viện vào `/usr/lib/mbedtls3/` rồi thả symlink tương thích vào `/usr/l
 binary openrgb vẫn tìm thấy. Hai gói không đụng file nhau — không cần gỡ
 `mbedtls` 4.x đi.
 
-> Nếu lỡ cài `openrgb` từ kho nhị phân, tự thêm `sudo pacman -S mbedtls3`.
->
 > `paru -S <gói>` sẽ lấy bản trong kho sync nếu kho đó có đúng tên gói, lúc đó
 > **không** build từ AUR. Ép build thì thêm `-a`: `paru -a -S <gói>`.
+
+Máy tham chiếu đang chạy `openrgb 1.0-2.1` từ kho nhị phân chứ không phải
+`openrgb-git`, và `mbedtls3` vẫn có sẵn vì gói đó khai báo nó là phụ thuộc cứng:
+
+```bash
+$ pacman -Qi openrgb | grep 'Depends On'
+Depends On  : ... mbedtls3 ...
+```
+
+Nên nếu `openrgb -l` chạy được thì không cần làm gì thêm. Nếu lỡ gặp
+`error while loading shared libraries: libmbedx509.so.7` thì
+`sudo pacman -S mbedtls3`.
+
+`lianli-linux-git` kéo theo `evdi-dkms` và `ffmpeg` làm phụ thuộc. `evdi` ở
+đây **không cần thiết** cho fan/RGB — xem [mục evdi](#evdi-trong-installation-health).
 
 ### 4. Copy file và cấp quyền
 
@@ -102,10 +115,25 @@ chmod +x ~/.local/bin/apply-rgb ~/.local/lib/*.sh
 [ -e ~/.config/lianli/config.json ] || cp lianli/config.json ~/.config/lianli/
 cp lianli/rgb_presets.json ~/.config/lianli/
 
-# tạo /run/lianli-{daemon,control}.lock nếu thiếu
+# --- Group `lianli` + 2 file lock ---
+#
+# Gói lianli-linux-git 1.1.4-1 KHÔNG ship 2 file rule này (lỗi đóng gói AUR).
+# Thiếu thì daemon không lên được, xem [Vì sao phải tự cài 2 file rule].
+# `||` để không đè bản gói, phòng khi bản gói sau này bổ sung.
+[ -f /usr/lib/tmpfiles.d/lianli.conf ] || \
+  sudo install -Dm644 packaging/tmpfiles.d/lianli.conf /usr/lib/tmpfiles.d/lianli.conf
+[ -f /usr/lib/sysusers.d/lianli.conf ] || \
+  sudo install -Dm644 packaging/sysusers.d/lianli.conf /usr/lib/sysusers.d/lianli.conf
+
+sudo systemd-sysusers /usr/lib/sysusers.d/lianli.conf   # tạo user + group lianli
 sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lianli.conf
 sudo usermod -aG i2c,lianli "$(id -un)"
 
+# --- Rules udev ---
+#
+# Đặt SAU khi đã tạo group: udev nạp rules một lần lúc start, và group phải
+# tồn tại trước khi nạp. Nạp lúc group còn chưa có thì token GROUP="lianli"
+# không resolve được gid và bị bỏ qua im lặng — xem [Node hidraw vẫn root:root].
 sudo cp udev/60-aura-led.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
@@ -120,17 +148,90 @@ Màu LED bạn đang để nằm ở `rgb.devices[].effect_memory`, và lệnh c
 mất nó. Device ID thì daemon tự sửa lại được, còn màu thì không — phải chạy
 `apply-rgb` lại. Muốn cài lại từ đầu thì `rm` file cũ đi trước.
 
-**Hai file lock trong `/run`** do `/usr/lib/tmpfiles.d/lianli.conf` tạo, nên
-lệnh phải là `systemd-tmpfiles`, không phải `systemd-sysusers` — cái sau chỉ
-lo `/etc/passwd` và `/etc/group`, không đụng `/run`. Lệnh ở trên còn chỉ đích
-danh đúng file của lianli, thay vì quét toàn bộ `tmpfiles.d` của hệ thống.
+#### Vì sao phải tự cài 2 file rule
 
-Thực ra thường không cần chạy: `21-systemd-tmpfiles.hook` đã tạo sẵn lúc cài
-gói, và `/run` là tmpfs nên `systemd-tmpfiles-setup.service` tạo lại mỗi lần
-boot. Dòng này là để phòng khi cài lại mà không reboot.
+Hai file trong `packaging/` là **bắt buộc**, không phải tuỳ chọn. Gặp lỗi này:
+
+```
+Failed to read '/usr/lib/tmpfiles.d/lianli.conf': No such file or directory
+usermod: group 'lianli' does not exist
+```
+
+Nguyên nhân là lỗi đóng gói AUR, không phải máy bạn: `lianli-linux-git 1.1.4-1`
+chỉ cài 7 path (`pacman -Ql lianli-linux-git` xem lại), **không** kèm
+`tmpfiles.d/lianli.conf` lẫn `sysusers.d/lianli.conf`. Trong khi đó:
+
+| Thiếu | Hậu quả |
+|-------|----------|
+| `tmpfiles.d/lianli.conf` | daemon **từ chối khởi động**, restart loop |
+| `sysusers.d/lianli.conf` | không có group `lianli`, `usermod` abort |
+
+Hai chỗ đều là điều kiện tiên quyết mà bản thân gói đòi hỏi:
+
+- `60-lianli.rules` của gói dùng `GROUP="lianli"` ở **cả 22 dòng**.
+- daemon 1.1.4 giữ shared hardware lock ở `/run/lianli-daemon.lock` và **exit 1
+  nếu mở không được**. Log lúc đó là:
+
+      Error: Shared daemon lock /run/lianli-daemon.lock is unavailable; refusing
+             to start a competing hardware owner. Install the tmpfiles rule on
+             the host and run `sudo systemd-tmpfiles --create lianli.conf`.
+
+  Thấy đoạn này là nghĩa là thiếu `tmpfiles.d/lianli.conf`.
+
+Nội dung 2 file copy **nguyên văn** từ
+[upstream `sgtaziz/lian-li-linux`](https://github.com/sgtaziz/lian-li-linux)
+(`packaging/{tmpfiles,sysusers}.d/lianli.conf`). Đã kiểm chứng trên máy thật:
+daemon lên được ngay, 5/5 lần nạp lại rule đều áp đúng gid.
+
+**Hai lệnh này không thừa.** `/run` là tmpfs nên lock mất sau mỗi lần reboot;
+`systemd-tmpfiles-setup.service` sẽ tạo lại từ rule trong `/usr/lib/tmpfiles.d/`.
+Đừng `touch` tay — touch không sống sót qua reboot, còn rule thì có.
+
+**Hai lệnh phải đúng thứ tự.** `systemd-sysusers` tạo group, `systemd-tmpfiles` tạo
+lock. Ngược lại là `usermod: group 'lianli' does not exist`. Và `sysusers` phải
+chạy **trước** phần `udevadm` ở trên — xem mục kế.
+
+#### Node hidraw vẫn `root:root`
+
+Sau khi tạo group, `/dev/hidrawN` của Lian Li phải ra:
+
+```bash
+$ ls -l /dev/hidraw*    # dòng 0cf2:a100
+crw-rw----+ 1 root lianli 240, 10 ... /dev/hidraw10
+```
+
+Nếu vẫn `crw-------  root root` (group `root`) thì token `GROUP="lianli"` đã bị
+bỏ qua. Lý do: udev nạp rules **một lần lúc start**, và group phải tồn tại
+trước lúc nạp. Nạp lúc group chưa có → không resolve được gid → bỏ qua **im lặng**,
+không có cảnh báo nào trong journal.
+
+Dấu hiệu nhận biết là `ls -l` hiện `crw-rw----+` cho group `root`, tức `0660`
+đúng mà group sai — mode đó chỉ là hiệu ứng của ACL mask do `uaccess` builtin
+(`73-seat-late.rules`) đặt, **không phải** `MODE=` của rule có hiệu lực.
+
+Cách kiểm chứng:
+
+```bash
+journalctl --user -b -o cat | grep 'lianli.rules.*Set group'
+# có dòng  ->  hidraw10: .../60-lianli.rules:100 GROUP="lianli": Set group ID: 957
+# trống    ->  rule chưa từng khớp
+```
+
+Cách sửa: tạo group → `udevadm control --reload-rules` → trigger lại. Đã thử 5
+lần liên tiếp, cả có lẫn không có `sleep` giữa hai lệnh, đều ra kết quả đúng.
 
 `usermod` chỉ ghi vào `/etc/group`, nên **thoát hẳn rồi đăng nhập lại** thì nhóm
 mới có hiệu lực. Reboot ở bước 2 không giúp được, vì nó nằm trước `usermod`.
+
+Kiểm tra sau khi login lại:
+
+```bash
+id -nG | grep -E '^(i2c|lianli)$'    # phải thấy cả hai
+```
+
+Chưa thấy thì `systemd --user` hiện tại vẫn mang group cũ — service vẫn chạy
+được nhờ ACL `uaccess`, chỉ là chưa dùng được đường group "không cần login"
+mà thiết kế nhắm tới.
 
 `udevadm trigger` bắn lại rule cho **mọi** node hidraw, không riêng node AURA —
 không thu hẹp được, vì `idVendor` nằm trên device chứ không nằm trên
@@ -170,6 +271,51 @@ thì bản trong `~/.config/` vẫn thắng, nên nhớ đồng bộ lại từ
 Dùng phần cứng khác máy tham chiếu thì để daemon tự sinh `config.json` rồi chỉnh
 theo tài liệu upstream. Lần chạy đầu daemon sẽ tự sửa device ID về ID thật và
 báo `Migrating wired device identities`.
+
+### 6. Xác minh
+
+Chạy hết 8 dòng này. Không dòng nào được báo lỗi thì cài đặt đã đúng.
+
+```bash
+getent group lianli                                    # lianli:x:957:...
+ls -l /run/lianli-daemon.lock /run/lianli-control.lock # root root, rw-rw-rw-
+systemctl --user is-active openrgb.service lianli-daemon.service
+openrgb -l                                             # đủ 4 mục
+journalctl --user -t openrgb-wrapper -n 20 --no-pager | grep 'OK:'
+journalctl --user -u lianli-daemon -n 20 --no-pager | grep 'shared daemon lock'
+for s in white rainbow breath red xanhtim vangxanh daquang2; do
+  apply-rgb "$s" && echo "$s OK" || echo "$s FAIL"
+done
+```
+
+Kết quả đo được trên máy tham chiếu sau khi cài:
+
+```
+lianli-daemon.service: active
+openrgb.service: active
+0: Kingston Fury DDR5 DRAM
+1: Sapphire Radeon RX 7800 XT Nitro+
+2: Lian Li Uni Hub - SL
+3: ASUS ROG STRIX Z690-A GAMING WIFI
+openrgb-wrapper: OK: 4 controllers (Kingston present); applied scheme 'white'
+lianli_daemon::pidlock: Acquired shared daemon lock at /run/lianli-daemon.lock
+lianli_daemon::service::init: Opened ENE 6K77 SL/AL Fan Controller as fan device: hid:0cf2:a100:1-13.3
+white OK / rainbow OK / breath OK / red OK
+xanhtim OK / vangxanh OK / daquang2 OK        (7/7 scheme, exit 0)
+```
+
+Dòng `bỏ qua [2] Lian Li Uni Hub - SL` hiện ra giữa các scheme là **đúng** —
+xem [Lian Li hub](#lian-li-hub).
+
+Daemon cần ~10s để dò xong thiết bị, nên `openrgb -l` ngay sau `enable --now`
+có thể trả về rỗng. Đợi vài giây rồi thử lại, hoặc:
+
+```bash
+journalctl --user -t openrgb-wrapper -f
+```
+
+Còn `id -nG | grep -E '^(i2c|lianli)$'` thì kiểm **sau khi đăng nhập lại**, xem
+[Node hidraw vẫn root:root](#node-hidraw-vẫn-rootroot).
 
 ---
 
@@ -245,6 +391,10 @@ Mode không phải thiết bị nào cũng có, nên mới cần section riêng:
 
 | Triệu chứng | Nguyên nhân | Cách sửa |
 |-------------|-------------|----------|
+| `Failed to read '/usr/lib/tmpfiles.d/lianli.conf'` | gói AUR không ship file này | xem [Vì sao phải tự cài 2 file rule](#vì-sao-phải-tự-cài-2-file-rule) |
+| `usermod: group 'lianli' does not exist` | chưa có group `lianli` | `sudo systemd-sysusers /usr/lib/sysusers.d/lianli.conf` rồi chạy lại `usermod` |
+| `Shared daemon lock /run/lianli-daemon.lock is unavailable` | thiếu tmpfiles rule → daemon restart loop | như dòng đầu, rồi `systemctl --user restart lianli-daemon` |
+| `/dev/hidrawN` của Lian Li là `root:root` | udev nạp rule trước khi có group | xem [Node hidraw vẫn root:root](#node-hidraw-vẫn-rootroot) |
 | `openrgb -l` không thấy Kingston | `spd5118` còn giữ bus SPD | blacklist + `mkinitcpio -P` + reboot |
 | `! openrgb failed for [2] zone=all` rồi restart lặp lại | `apply-rgb` set `static` lên hub (abort) | xem [Lian Li hub](#lian-li-hub) |
 | `error while loading shared libraries: libmbedx509.so.7` | thiếu mbedtls 3.x | `sudo pacman -S mbedtls3` |
@@ -297,6 +447,15 @@ dkms status | grep evdi              # phải có dòng khớp uname -r
 Cài headers là hook `70-dkms-install.hook` tự gọi `dkms install`, nên không cần
 gọi tay. Hook không `modprobe` — vẫn phải modprobe hoặc reboot.
 
+Sau khi kernel headers có sẵn thì `evdi` sẽ load bình thường và ô Health xanh
+lại:
+
+```bash
+lsmod | grep -c '^evdi'      # 1 = đang load
+```
+
+Ô này **không ảnh hưởng gì tới RGB hay fan** kể cả khi `Failed`.
+
 ### Ghi chú
 
 - **Có GDM thì lúc boot daemon restart vài lần** rồi mới ổn định. Greeter chạy
@@ -318,9 +477,13 @@ cp ~/.local/bin/apply-rgb           ~/rgb-config/local/bin/
 cp ~/.local/lib/*-wrapper.sh        ~/rgb-config/local/lib/
 cp ~/.config/openrgb/schemes/*.rgb  ~/rgb-config/schemes/
 cp ~/.config/lianli/*.json          ~/rgb-config/lianli/
-cp ~/.config/systemd/user/openrgb.service        ~/rgb-config/systemd/
+cp ~/.config/systemd/user/openrgb.service          ~/rgb-config/systemd/
+cp ~/.config/systemd/user/lianli-daemon.service     ~/rgb-config/systemd/
 cp ~/.config/systemd/user/lianli-daemon.service.d/retry-open-acl.conf \
    ~/rgb-config/systemd/lianli-daemon.service.d/
 
 cd ~/rgb-config && git commit -am "update: ..." && git push
 ```
+
+`packaging/` không cần đồng bộ — 2 file đó copy nguyên văn từ upstream, không
+đổi theo máy.
