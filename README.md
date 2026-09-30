@@ -289,6 +289,62 @@ rm ~/.config/systemd/user/lianli-daemon.service.d/debug.conf
 systemctl --user daemon-reload && systemctl --user restart lianli-daemon
 ```
 
+### Module kernel `evdi` (tuỳ chọn)
+
+Panel **Installation Health** trong `lianli-gui` sẽ báo ô *Optional display
+module: evdi* ở trạng thái **Failed** nếu bạn chưa cài module kernel này. Đây là
+dự kiến với phần cứng trong repo này — bỏ qua được.
+
+**Khi nào thật sự cần.** `evdi` tạo một màn hình ảo để đẩy hình desktop lên
+**LCD của hub**. Repo này dùng **Uni Hub SL** — chỉ có quạt và LED, không có
+màn hình, và `config.json` để `lcds: []`. Nên fan và RGB không cần `evdi`:
+
+> *"Ordinary fan/RGB control does not require an EVDI kernel module."*
+> — [docs/troubleshooting.md](https://github.com/sgtaziz/lian-li-linux/blob/main/docs/troubleshooting.md)
+
+Máy chạy dwm/X11 cũng không dùng tới: `evdi` chỉ là đường dự phòng cho
+desktop không phải Hyprland, mà Hyprland native headless vốn đã không cần nó.
+
+**Vì sao vẫn báo Failed.** Health phân biệt hai ca:
+
+| Ca | Health hiện |
+|----|------------|
+| Module **chưa** đăng ký | `N/A` |
+| Module **đã đăng ký** nhưng chưa build cho kernel đang chạy | `Failed` |
+
+`evdi-dkms` đăng ký module rồi, nhưng DKMS chỉ build cho những kernel có sẵn
+headers. Kiểm tra:
+
+```bash
+uname -r
+dkms status | grep evdi
+ls -d /lib/modules/$(uname -r)/build    # không có thì thiếu kernel dev package
+```
+
+**Cài thì làm sao.** Chỉ cần gói headers của kernel đang chạy. DKMS tự build
+lại qua hook `70-dkms-install.hook` nên không phải gọi tay:
+
+```bash
+sudo pacman -S linux-arisa-headers
+sudo modprobe evdi
+dkms status | grep evdi                  # phải có dòng khớp uname -r
+```
+
+Đổi kernel khác thì thay tên gói: `linux-cachyos-headers`,
+`linux-cachyos-lts-headers`. Sau khi cài headers, log pacman sẽ có:
+
+```
+running '70-dkms-install.hook'...
+==> dkms install --no-depmod evdi/1.15.1 -k 7.2.8-lqx1-1-arisa
+```
+
+Module đã build thì vẫn phải `modprobe` hoặc reboot mới nạp — hook không tự
+`modprobe`. Với kernel mới cài sau này, DKMS build sẵn lúc cài kernel, chỉ cần
+reboot.
+
+> Không cài cũng không sao. Thêm module kernel vào máy đang chạy ổn chỉ để một
+> ô trong bảng Health chuyển từ Failed sang Passed thì không đáng.
+
 ### Vài điểm dễ nhầm
 
 - **Có GDM thì lúc boot daemon restart vài lần** rồi mới ổn định. Greeter
