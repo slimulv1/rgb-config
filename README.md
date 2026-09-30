@@ -22,7 +22,7 @@ Hai hệ thống chạy song song:
 Ngoài ra:
 
 - **Deepcool LT720 pump** nối vào ARGB Header 1 của mainboard, tức zone 1 — scheme phải resize về `SIZE=22` mới khớp. Fan FK120 đi kèm không có đèn.
-- **Lian Li Uni Hub SL v1 + 5× fan SL120** do `lianli-daemon` điều khiển qua hidraw. Màu nằm trong `~/.config/lianli/config.json`, không qua OpenRGB.
+- **Lian Li Uni Hub SL v1 + 5× fan SL120** do `lianli-daemon` điều khiển qua hidraw. Màu nằm trong `~/.config/lianli/config.json`, không qua OpenRGB. Lưu ý màu `#496DFF` trong file đó là màu trắng *đã bù lỗi LED*, xem [`#496DFF` trên fan SL120 v1](#496dff-trên-fan-sl120-v1--cân-bằng-lỗi-phần-cứng).
 
 ---
 
@@ -447,6 +447,44 @@ Bỏ thêm thiết bị khác nếu cần:
 ```bash
 APPLY_RGB_SKIP="Lian Li,Tên thiết bị" apply-rgb white
 ```
+
+### `#496DFF` trên fan SL120 v1 — cân bằng lỗi phần cứng
+
+Màu LED của hub **không** đổi bằng `apply-rgb`. Nó nằm trong
+`~/.config/lianli/config.json`, sửa tay hoặc qua GUI của `lianli-daemon`.
+
+Nhìn kỹ thì thấy một con số đáng ngờ:
+
+| Zone | Mode | Màu trong config | Nhìn ra |
+|------|------|------------------|---------|
+| `group0` zone 0-2 | `Runway` | `#496DFF` | trắng |
+| `group1` zone 1-2 | `Tide` | `#496DFF` | trắng |
+| `group2` / `group3` zone 0-2 | `Static` | `#FFFFFF` | trắng |
+| `group1` zone 0 | `Staggered` | `#FFDDDD` | hồng nhạt |
+
+`#496DFF` **không phải màu xanh** — nó là màu trắng *bù lỗi quạt*. Trên fan
+Lian Li SL120 v1 của máy này, **bóng LED kênh xanh (blue) bị yếu hơn hẳn kênh
+đỏ và xanh lá**. Đặt `#496DFF` = R73 G109 B255 sẽ bù lại: ba kênh lệch nhau đúng
+lượng, mắt thấy thành trắng. Nếu đặt `#FFFFFF` trên những zone đó thì xanh
+chiếm ít hơn, ra **tím nhạt/xám xanh** chứ không phải trắng.
+
+Đây là lỗi phần cứng của quạt, không phải cấu hình sai. Nó chỉ ảnh hưởng cảm
+nhận màu — fan vẫn điều khiển tốc độ bình thường.
+
+Hệ quả thực tế:
+
+- **Đổi màu qua `apply-rgb` không đụng tới phần này** — đó là chủ ý, xem
+  [Lian Li hub](#lian-li-hub).
+- **Đừng "sửa cho đẹp" `#496DFF` thành `#FFFFFF`** trong `group0`/`group1`, sẽ
+  thấy màu lệch. Muốn tự hiệu chỉnh thì tăng dần R/G cho tới khi mắt thấy cân
+  bằng, không có công thức cố định vì độ yếu phụ thuộc từng bóng.
+- **Đừng áp cùng một giá trị cho mọi group.** `group2`/`group3` đang dùng
+  `#FFFFFF` thật và nhìn ra trắng bình thường — cứ để nguyên. Chỉ hiệu chỉnh
+  những zone mà bạn tự thấy màu lệch, từng zone một.
+- **`brightness` và `speed` trong file này là thang 0–4**, khác hẳn thang 0–100
+  của `BRIGHTNESS`/`SPEED` trong scheme `.rgb`. Daemon từ chối giá trị ngoài
+  `0..=4` (`RGB brightness must be 0..=4`). Config hiện đặt `brightness: 4` —
+  mức cao nhất — và `speed: 0` cho các zone tĩnh.
 
 ### Tạo scheme riêng
 
