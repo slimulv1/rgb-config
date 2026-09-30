@@ -146,7 +146,7 @@ sudo systemctl enable --now rmmod-spd5118.service
 sudo pacman -S openrgb-git            # hoặc: paru -S openrgb-git
 
 # Lian Li RGB (quạt + AIO) — bản Linux thay thế L-Connect 3
-sudo pacman -S lianli-linux-git
+yay -S lianli-linux-git
 ```
 
 > 📚 Lian Li Linux: [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux)
