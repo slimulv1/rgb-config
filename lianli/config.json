@@ -1,5 +1,7 @@
 {
+  "turn_off_lcds_on_shutdown": true,
   "default_fps": 30.0,
+  "hardware_video": false,
   "hid_backend": "hidraw",
   "lcds": [],
   "fan_curves": [
@@ -30,7 +32,7 @@
   "fans": {
     "speeds": [
       {
-        "device_id": "hid:6243168001:port0",
+        "device_id": "hid:0cf2:a100:1-13.3:port0",
         "speeds": [
           "off",
           "off",
@@ -39,7 +41,7 @@
         ]
       },
       {
-        "device_id": "hid:6243168001:port1",
+        "device_id": "hid:0cf2:a100:1-13.3:port1",
         "speeds": [
           "off",
           0,
@@ -58,7 +60,7 @@
     "openrgb_port": 6743,
     "devices": [
       {
-        "device_id": "hid:6243168001:group2",
+        "device_id": "hid:0cf2:a100:1-13.3:group2",
         "mb_rgb_sync": false,
         "zones": [
           {
@@ -124,7 +126,7 @@
         ]
       },
       {
-        "device_id": "hid:6243168001:group3",
+        "device_id": "hid:0cf2:a100:1-13.3:group3",
         "mb_rgb_sync": false,
         "zones": [
           {
@@ -190,9 +192,9 @@
         ]
       },
       {
-        "device_id": "hid:6243168001:group1",
+        "device_id": "hid:0cf2:a100:1-13.3:group1",
         "mb_rgb_sync": false,
-        "active_preset": "White",
+        "active_preset": "Static White",
         "zones": [
           {
             "zone_index": 0,
@@ -254,11 +256,32 @@
             "swap_lr": false,
             "swap_tb": false
           }
+        ],
+        "regions": [
+          {
+            "effect": {
+              "mode": "Static",
+              "colors": [
+                [
+                  73,
+                  109,
+                  255
+                ]
+              ],
+              "speed": 2,
+              "brightness": 4,
+              "direction": "Clockwise",
+              "scope": "All",
+              "disabled": false
+            },
+            "flip": false
+          }
         ]
       },
       {
-        "device_id": "hid:6243168001:group0",
+        "device_id": "hid:0cf2:a100:1-13.3:group0",
         "mb_rgb_sync": false,
+        "active_preset": "Runway White",
         "zones": [
           {
             "zone_index": 0,
@@ -326,11 +349,11 @@
   },
   "aio": {},
   "ene6k77": {
-    "6243168001": {
+    "hid:0cf2:a100:1-13.3": {
       "fan_quantities": {
+        "3": 0,
         "1": 1,
-        "2": 0,
-        "3": 0
+        "2": 0
       }
     }
   },
