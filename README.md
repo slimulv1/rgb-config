@@ -95,24 +95,15 @@ Sau reboot, `lsmod | grep spd5118` phải **không có** dòng nào.
 ### Bước 3 — Gói phần mềm
 
 ```bash
-sudo pacman -S mbedtls3 openrgb-git
-paru -S lianli-linux-git
+paru -S openrgb-git lianli-linux-git
 ```
 
-`mbedtls3` không phải tuỳ chọn. OpenRGB chỉ chạy với mbedtls 3.x — chính
-`OpenRGB.pro` của upstream ghi rõ *"will not work with mbedtls 4.x"*, còn máy
-đang chạy mbedtls 4.x. Gói `mbedtls3` nằm riêng ở `/usr/lib/mbedtls3` nên cài
-song song, không phải gỡ gì cả.
+Hai gói này đều có trong AUR, `paru` tự lo phần phụ thuộc.
 
-Sau khi cài, bản `lianli-linux-git` trong repo arisa có thể thiếu
-`/usr/lib/tmpfiles.d/lianli.conf` — thiếu thì daemon không khởi động. Kiểm và bù:
-
-```bash
-test -f /usr/lib/tmpfiles.d/lianli.conf || sudo tee /usr/lib/tmpfiles.d/lianli.conf > /dev/null <<'EOF'
-f /run/lianli-daemon.lock 0666 root root - -
-f /run/lianli-control.lock 0666 root root - -
-EOF
-```
+> Nếu bạn cài `openrgb` từ kho nhị phân thay vì AUR, nhớ thêm
+> `sudo pacman -S mbedtls3` — OpenRGB chỉ chạy với mbedtls 3.x, còn kho
+> Arch đang ở 4.x. Gói `mbedtls3` nằm riêng ở `/usr/lib/mbedtls3` nên cài
+> song song, không phải gỡ gì cả. Bản AUR đã khai báo sẵn dependency này.
 
 ### Bước 4 — Copy file, phân quyền, cấp quyền device
 
@@ -130,7 +121,6 @@ cp lianli/*.json ~/.config/lianli/
 cp schemes/*.rgb ~/.config/openrgb/schemes/
 chmod +x ~/.local/bin/apply-rgb ~/.local/lib/*.sh
 
-sudo groupadd -r lianli 2>/dev/null
 sudo usermod -aG i2c,lianli $USER
 
 sudo cp udev/60-aura-led.rules /etc/udev/rules.d/
@@ -138,7 +128,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-> `sudo groupadd -r lianli` báo "đã tồn tại" là bình thường khi chạy lại.
+> Nhóm `lianli` do chính gói tạo qua `sysusers.d`, không phải tự tạo tay.
 > Phải **đăng xuất rồi đăng nhập lại** thì nhóm mới có hiệu lực — hoặc reboot ở Bước 2.
 
 `~/.local/bin` phải nằm trong `PATH`:
@@ -244,11 +234,9 @@ BRIGHTNESS=100
 
 | Triệu chứng | Nguyên nhân | Cách sửa |
 |-------------|-------------|----------|
-| `openrgb: error while loading shared libraries: libmbedx509.so.7` | thiếu mbedtls 3.x | `sudo pacman -S mbedtls3` |
 | `openrgb -l` không thấy Kingston | `spd5118` còn giữ bus SPD | blacklist + `mkinitcpio -P` + reboot |
 | `openrgb failed for [2] zone=all` rồi restart lặp lại | `apply-rgb` set `static` lên Lian Li hub (abort) | dùng bản `apply-rgb` có `APPLY_RGB_SKIP` |
-| `Shared daemon lock ... is unavailable` | thiếu `/usr/lib/tmpfiles.d/lianli.conf` | tạo file như Bước 3 rồi `sudo systemd-tmpfiles --create lianli.conf` |
-| `Segmentation fault (core dumped)` | `openrgb --server` chết | `ldd /usr/bin/openrgb \| grep 'not found'` |
+| `error while loading shared libraries: libmbedx509.so.7` | thiếu mbedtls 3.x | `sudo pacman -S mbedtls3` |
 | `no devices listed by openrgb -l` khi chạy `apply-rgb` | service chưa lên | `systemctl --user status openrgb` |
 
 Dòng log này **bình thường, đừng điều tra**:
@@ -261,10 +249,10 @@ Dòng log này **bình thường, đừng điều tra**:
 Nếu log Lian Li không có dòng RGB ở mức `info`, đó không phải lỗi — mức đó
 không in. Xem mục dưới.
 
-### Kiểm tra daemon có thật sự ghi LED không
+### Nhìn thấy LED đang chạy
 
-Bản arisa không có `lianli-control` như tài liệu upstream dùng, nên bật log
-debug tạm:
+Log mức `info` **không** in dòng RGB, nên log trông như chưa hoạt động dù đèn
+đã đổi. Muốn thấy rõ thì bật debug tạm:
 
 ```bash
 mkdir -p ~/.config/systemd/user/lianli-daemon.service.d
