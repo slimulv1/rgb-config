@@ -143,10 +143,10 @@ sudo systemctl enable --now rmmod-spd5118.service
 
 ```bash
 # OpenRGB (bản git — khớp repo này, 0.9+)
-yay -S openrgb-git            # hoặc: paru -S openrgb-git
+sudo pacman -S openrgb-git            # hoặc: paru -S openrgb-git
 
 # Lian Li RGB (quạt + AIO) — bản Linux thay thế L-Connect 3
-yay -S lianli-linux-git
+sudo pacman -S lianli-linux-git
 ```
 
 > 📚 Lian Li Linux: [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux)
